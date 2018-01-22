@@ -1,0 +1,1090 @@
+---
+title: "154_project"
+author: "Benjamin Bang"
+date: "4/21/2017"
+output: html_document
+---
+```{r}
+library(glmnet); library(dplyr); library(ggplot2); library(MASS); library(leaps); library(snow); library(parallel); library(foreach); library(doParallel); library(rgl, car); library(kernlab); library(pls); library(reshape2); library(aod); library(leaps);library(caret); library(data.table);library(RSQLite); library(StatMatch); library(klaR); library(fpc); library(spls); library(tree); library(earth); library(ipred); library(rpart); library(rpart.plot); library(adabag);library(tm); require(NLP); library(doParallel); library(text2vec);
+library(RTextTools);library("e1071");library(jsonlite)
+registerDoParallel(cores = 6)
+registerDoParallel(cores = 1)
+library(devtools)
+devtools::install_github("bmschmidt/wordVectors")
+library(wordVectors)
+library(magrittr)
+library(ngram)
+
+```
+
+
+
+```{r}
+setwd("~/Desktop/154_Final_Proj/Misc/Old_datasets/old_dataset")
+full_business <- read.csv("yelp_academic_dataset_business_train.csv", header = T, stringsAsFactors = F)
+setwd("~/Desktop/154_Final_Proj/Data/train")
+business <- read.csv("business_train.csv", header = T, stringsAsFactors = F)
+checkin <- read.csv("checkin.csv", header = T, stringsAsFactors = F)
+review <- read.csv("review_train.csv", header = T, stringsAsFactors = F)
+tip <- read.csv("tip.csv", header = T, stringsAsFactors = F)
+user <- read.csv("user.csv", header = T, stringsAsFactors = F)
+setwd("~/Desktop/154_Final_Proj/Data/test")
+test_review <- read.csv("review_test.csv", header = T, stringsAsFactors = F)
+test_business <- read.csv("business_test.csv", header = T, stringsAsFactors = F)
+
+```
+
+
+
+```{r}
+
+# Check NAs
+business_na_count <- sum(sapply(business, is.na))
+checkin_na_count <- sum(sapply(checkin, is.na))
+review_na_count <- sum(sapply(review, is.na))
+tip_na_count <- sum(sapply(tip, is.na))
+user_na_count <- sum(sapply(review, is.na))
+c(business_na_count, checkin_na_count, review_na_count, tip_na_count, user_na_count)
+# No NA counts in all of these data points
+
+
+grep(' 4/5', review$text, ignore.case = T)
+grep(' 5/5', review$text, ignore.case = T)
+
+review$stars <- as.factor(review$stars)
+#a<- randomForest::randomForest(stars~., data= review, ntree = 100, importance = T, do.trace = F)
+
+cart <- rpart::rpart(formula = stars~., data= review, method = 'class')
+jpeg('cart_cv', width = 1200, height = 900)
+plot(cart)
+text(cart, use.n = T, all = T)
+dev.off()
+
+
+
+# User data PCA
+user_to_pca <- 
+  user %>% 
+    select(useful, compliment_photos, compliment_list, compliment_funny, compliment_plain, review_count,
+           fans, compliment_note, funny, compliment_writer, compliment_cute, #average_stars,
+           compliment_hot, compliment_profile, compliment_cool, cool)
+pca_user <- prcomp( x = user_to_pca, retx = T, center = T, scale.= F)
+screeplot(pca_user, type = 'lines')
+```
+
+```{r}
+# Split the data into 5 according to the stars that the restaurants received
+star_5_reviews <-
+  review %>% filter(review$stars == 5)
+star_4_reviews <-
+  review %>% filter(review$stars == 4)
+star_3_reviews <-
+  review %>% filter(review$stars == 3)
+star_2_reviews <-
+  review %>% filter(review$stars == 2)
+star_1_reviews <-
+  review %>% filter(review$stars == 1)
+
+
+
+star_5_corp <- tm::Corpus(VectorSource(star_5_reviews$text))
+star_4_corp <- tm::Corpus(VectorSource(star_4_reviews$text))
+star_3_corp <- tm::Corpus(VectorSource(star_3_reviews$text))
+star_2_corp <- tm::Corpus(VectorSource(star_2_reviews$text))
+star_1_corp <- tm::Corpus(VectorSource(star_1_reviews$text))
+
+star_5_dtm <- tm::DocumentTermMatrix(star_5_corp)
+star_4_dtm <- tm::DocumentTermMatrix(star_4_corp)
+star_3_dtm <- tm::DocumentTermMatrix(star_3_corp)
+star_2_dtm <- tm::DocumentTermMatrix(star_2_corp)
+star_1_dtm <- tm::DocumentTermMatrix(star_1_corp)
+
+
+inspect(removeSparseTerms(star_5_dtm, 0.4))
+inspect(removeSparseTerms(DocumentTermMatrix(star_5_corp, list(stopwords = T))))
+  
+# removeSparseTerms(star_5_dtm, 0.4))
+inspect(removeSparseTerms(VectorSource(star_5_reviews$text)[1], sparse = 0.96))
+
+inspect(removeSparseTerms(star_4_dtm, 0.97))
+inspect(removeSparseTerms(star_3_dtm, 0.4))
+inspect(removeSparseTerms(star_2_dtm, 0.4))
+inspect(removeSparseTerms(star_1_dtm, 0.4))
+
+
+a_5 <- DocumentTermMatrix(tm_map(star_5_corp, removeWords, c(stopwords("english"),"and","that","the"," the","the ", "they", "this", "was")))
+inspect(a_5)
+a_3 <- DocumentTermMatrix(tm_map(star_3_corp, removeWords, c(stopwords("english"),"and","that","the"," the","the ", "they", "this", "was", "order", "just", "one", "order", "pizza", "place")))
+inspect(a_3)
+a_1 <- DocumentTermMatrix(tm_map(star_1_corp, removeWords, c(stopwords("english"),"and","that","the"," the","the ", "they", "this", "was", "order", "just", "one", "order", "pizza", "place")))
+inspect(a_1)  
+
+total_dtm <- DocumentTermMatrix(tm_map(Corpus(VectorSource(review$text)), removeWords, c(stopwords("english"),"and","that","the"," the","the ", "they", "this", "was")))
+inspect(removeSparseTerms(total_dtm, 0.99))
+```
+
+## Word2vec
+
+```{R}
+
+# Prepping the Text Data
+a = paste(review$text, sep =" ", collapse="")
+b = paste(test_review$text, sep =" ", collapse="")
+all_text = paste(a, b)
+write.table(all_text, "review_train.txt", sep='\t')
+
+# Prepping the data for the model
+prep_word2vec(origin = 'review_train.txt', destination = 'prepped.txt', lowercase = T, bundle_ngrams =  2)
+
+# W2V model
+#model = train_word2vec("prepped.txt","review.bin",
+#                       vectors=200, threads=8, window=12, iter=5, negative_samples=0)
+model <- wordVectors::read.binary.vectors("review.bin")
+
+
+model %>% closest_to("great")
+model %>% closest_to("bad")
+
+# PCA visualization for 'great' 
+good_5_keywords = model %>% 
+  closest_to(model[[c("great", "come_back","perfect", "delicious", "very_good","very_delicious")]],50)
+goodie = model[[good_5_keywords$word,average=F]]
+plot(goodie,method="pca")
+
+## Clustering
+set.seed(10)
+centers = 5
+clustering = kmeans(model,centers=centers,iter.max = 40)
+
+head(rownames(as.data.frame(model))[clustering$cluster==1], n = 20)
+
+
+
+# other clustering methods
+ingredients = c("delicious", 'best' ,"average","worst") 
+term_set = lapply(ingredients, 
+       function(ingredient) {
+          nearest_words = model %>% closest_to(model[[ingredient]],20)
+          nearest_words$word
+        }) %>% unlist 
+
+subset = model[[term_set,average=F]] 
+ 
+subset %>%
+  cosineDist(subset) %>% 
+  as.dist %>%
+  hclust %>%
+  plot 
+
+
+# Plotting 
+
+
+
+# Dimension Reduction and Visualization of similary to the keywords
+ratings_keywords = model[[c("best","great","average","bad", "worst"),average=F]]
+# model[1:3000,] here restricts to the 3000 most common words in the set.
+broken_ratings = model[,] %>% cosineSimilarity(ratings_keywords)
+
+# Filter to the top 40 keywords for each criteria.
+broken_ratings = broken_ratings[
+  rank(-broken_ratings[,1])<40 |
+  rank(-broken_ratings[,2])<40 |
+  rank(-broken_ratings[,3])<40 |
+  rank(-broken_ratings[,4])<40 |
+  rank(-broken_ratings[,5])<40,
+]
+plot(broken_ratings,type='n')
+text(broken_ratings,labels=rownames(broken_ratings))
+
+
+
+# model[1:3000,] here restricts to the 3000 most common words in the set.
+common_similarities_ratings = model[1:3000,] %>% cosineSimilarity(ratings_keywords)
+
+
+high_similarities_to_ratings = common_similarities_ratings[rank(-apply(common_similarities_ratings,1,max)) < 75,]
+
+high_similarities_to_ratings %>% 
+  prcomp %>% 
+  biplot(main="Fifty words in a\nprojection of ratings space")
+
+```
+
+
+
+```{R}
+pca <- prcomp(model, retx = T, center= T, scale. = F)
+head(rownames(model))
+
+pca$x[1:2,1:10]
+```
+
+
+# Using five categories - ['best', 'great', 'average', 'bad', 'worst'], try to find the top 20 words for each critieria and get their cosine similarities. I have keywords in each row and their weights for each of the five categories.
+
+What I will do with the test dataset is that I will detect the keywords from the review, give scores to each of the five criteria and add them onto the dataset for random forest - and of course, the scores are in relative scale from 0 to 100% in each criteria.
+
+
+```{R}
+ratings = broken_ratings
+
+# breaking the train reviews into the keywords
+tm::scan_tokenizer(review$text[1]) %in% rownames(ratings)
+
+ngram(review$text[1])
+
+
+```
+
+
+# Using text2vec for classifcation purposes
+
+## Text2vec package
+
+
+```{R}
+stopwords = c("i", "and", "the", "a", "it", "to", "was", "of", "is", "in", "for", "this", "that", "my", "you", "they", "with", "are", "had", "were", "at", "be", "there", "as", "s", "t", "we", "on", "me", "their", "have")
+
+
+# define preprocessing function and tokenization function
+it_train <- text2vec::itoken(review$text, 
+                             preprocessor = tolower,
+                             tokenizer = word_tokenizer,
+                             ids = review$user_id,
+                             progressbar = TRUE)
+it_test <- text2vec::itoken(test_review$text, 
+                             preprocessor = tolower,
+                             tokenizer = word_tokenizer,
+                             ids = test_review$user_id,
+                             progressbar = TRUE)
+
+#### Function to do it all
+get_text_accuracy <- function(review, test_review, test_business, it_train, it_test, 
+                              stopwords, ngram_max,
+                              pruned_term_count_min){
+  # Vocab Creation
+  vocab <- create_vocabulary(it_train, ngram=c(1,ngram_max), stopwords = stopwords)
+  vocab <- prune_vocabulary(vocab, term_count_min = pruned_term_count_min,
+                                doc_proportion_max = 0.5, doc_proportion_min = 0.001)
+  vectorizer <- vocab_vectorizer(vocab)
+  # DTM creation
+  dtm_train <- create_dtm(it_train,vectorizer)
+  dtm_test <- create_dtm(it_test, vectorizer)
+  
+  tfidf <- TfIdf$new()
+  # fit the model to the train data and transform it with the fitted model
+  dtm_train_tfidf <- fit_transform(dtm_train, tfidf)
+  dtm_test_tfidf <- fit_transform(dtm_test, tfidf)
+  # Fit model
+  glmnet_classifier <- cv.glmnet(x = dtm_train_tfidf,
+   y = review$stars, 
+   family = 'multinomial', 
+   # L1 penalty
+   alpha = 1,
+   # interested in the area under ROC curve
+   type.measure = "deviance",
+   # 5-fold cross-validation
+   nfolds = 5,
+   # high value is less accurate, but has faster training
+   thresh = 1e-3,
+   # again lower number of iterations for faster training
+   maxit = 1e3)
+
+  # Prediction
+  preds <- predict(glmnet_classifier, dtm_test_tfidf, type = 'class')[ ,1]
+  
+  # Creating Submission File
+  test_review_with_preds <- cbind(test_review, "preds" = as.numeric(preds))
+  submission<- test_review_with_preds %>% 
+      group_by(business_id) %>%
+      summarise(stars = mean(preds))
+  submission <- submission[submission$business_id %in% test_business$business_id,]
+}
+
+#CV Results
+results_cv_glmnet <- NULL
+
+for(i in 2){
+ for(j in c(100)){
+   results_cv_glmnet <- append(results_cv_glmnet, get_text_accuracy(ngram_max = i, pruned_term_count_min = j))
+ } 
+}
+atest<- get_text_accuracy(review = review, test_review = test_review, test_business = test_business, it_train = it_train, it_test = it_test, stopwords = stopwords, ngram_max = 2, pruned_term_count_min = 100)
+
+vocab_2gram <- create_vocabulary(it_train,ngram = c(1, 2), stopwords = stopwords)
+vocab_3gram <- create_vocabulary(it_train,ngram = c(1, 3), stopwords = stopwords)
+vocab_4gram <- create_vocabulary(it_train,ngram = c(1, 4), stopwords = stopwords)
+vocab_5gram <- create_vocabulary(it_train,ngram = c(1, 5), stopwords = stopwords)
+# Pruned vocab
+pruned_vocab_2_gram_600 = prune_vocabulary(vocab, term_count_min = 600,
+                                doc_proportion_max = 0.5, doc_proportion_min = 0.001)
+
+pruned_vocab_2_gram_500 = prune_vocabulary(vocab, term_count_min = 500,
+                                doc_proportion_max = 0.5, doc_proportion_min = 0.001)
+pruned_vocab_2_gram_400 = prune_vocabulary(vocab, term_count_min = 400,
+                                doc_proportion_max = 0.5, doc_proportion_min = 0.001)
+
+
+pruned_vocab_3_gram_400 <- prune_vocabulary(vocab_3gram, term_count_min = 400,
+                                doc_proportion_max = 0.5, doc_proportion_min = 0.001)
+pruned_vocab_3_gram_600 <- prune_vocabulary(vocab_3gram, term_count_min = 600,
+                                doc_proportion_max = 0.5, doc_proportion_min = 0.001)
+
+
+pruned_vocab_4_gram_100 <- prune_vocabulary(vocab_4gram, term_count_min = 100,
+                                doc_proportion_max = 0.5, doc_proportion_min = 0.001)
+pruned_vocab_4_gram_200 <-  prune_vocabulary(vocab_4gram, term_count_min = 200,
+                                doc_proportion_max = 0.5, doc_proportion_min = 0.001)
+pruned_vocab_4_gram_300 <-  prune_vocabulary(vocab_4gram, term_count_min = 300,
+                                doc_proportion_max = 0.5, doc_proportion_min = 0.001)
+pruned_vocab_4_gram_400 <-  prune_vocabulary(vocab_4gram, term_count_min = 400,
+                                doc_proportion_max = 0.5, doc_proportion_min = 0.001)
+
+
+pruned_vocab_5_gram_100 <- prune_vocabulary(vocab_5gram, term_count_min = 100,
+                                doc_proportion_max = 0.5, doc_proportion_min = 0.001)
+pruned_vocab_5_gram_200 <- prune_vocabulary(vocab_5gram, term_count_min = 200,
+                                doc_proportion_max = 0.5, doc_proportion_min = 0.001)
+
+
+pruned_vectorizer_2_gram_600 <- vocab_vectorizer(pruned_vocab_2_gram_600)
+pruned_vectorizer_2_gram_500 <- vocab_vectorizer(pruned_vocab_2_gram_500)
+pruned_vectorizer_2_gram_400 <- vocab_vectorizer(pruned_vocab_2_gram_400)
+pruned_vectorizer_3_gram_600 <- vocab_vectorizer(pruned_vocab_3_gram_600)
+pruned_vectorizer_3_gram_400 <- vocab_vectorizer(pruned_vocab_3_gram_400)
+pruned_vectorizer_4_gram_400 <- vocab_vectorizer(pruned_vocab_4_gram_400)
+pruned_vectorizer_4_gram_300 <- vocab_vectorizer(pruned_vocab_4_gram_300)
+pruned_vectorizer_4_gram_200 <- vocab_vectorizer(pruned_vocab_4_gram_200)
+pruned_vectorizer_4_gram_100 <- vocab_vectorizer(pruned_vocab_4_gram_100)
+pruned_vectorizer_5_gram_200 <- vocab_vectorizer(pruned_vocab_5_gram_200)
+pruned_vectorizer_5_gram_100 <- vocab_vectorizer(pruned_vocab_5_gram_100)
+
+#pruned_vectorizer_4 <- vocab_vectorizer(pruned_vocab_4_gram)
+#pruned_vectorizer_5 <- vocab_vectorizer(pruned_vocab_5_gram)
+
+dtm_train_2_gram_600 <- create_dtm(it_train, pruned_vectorizer_2_gram_600)
+dtm_train_2_gram_500 <- create_dtm(it_train, pruned_vectorizer_2_gram_500)
+dtm_train_2_gram_400 <- create_dtm(it_train, pruned_vectorizer_2_gram_400)
+dtm_train_3_gram_600 <- create_dtm(it_train, pruned_vectorizer_3_gram_600)
+dtm_train_3_gram_400 <- create_dtm(it_train, pruned_vectorizer_3_gram_400)
+dtm_train_4_gram_400 <- create_dtm(it_train, pruned_vectorizer_4_gram_400)
+dtm_train_4_gram_300 <- create_dtm(it_train, pruned_vectorizer_4_gram_300)
+dtm_train_4_gram_200 <- create_dtm(it_train, pruned_vectorizer_4_gram_200)
+dtm_train_4_gram_100 <- create_dtm(it_train, pruned_vectorizer_4_gram_100)
+dtm_train_5_gram_200 <- create_dtm(it_train, pruned_vectorizer_5_gram_200)
+dtm_train_5_gram_100 <- create_dtm(it_train, pruned_vectorizer_5_gram_100)
+
+
+dtm_test_2_gram_600 <- create_dtm(it_test, pruned_vectorizer_2_gram_600)
+dtm_test_2_gram_500 <- create_dtm(it_test, pruned_vectorizer_2_gram_500)
+dtm_test_2_gram_400 <- create_dtm(it_test, pruned_vectorizer_2_gram_400)
+dtm_test_3_gram_600 <- create_dtm(it_test, pruned_vectorizer_3_gram_600)
+dtm_test_3_gram_400 <- create_dtm(it_test, pruned_vectorizer_3_gram_400)
+dtm_test_4_gram_400 <- create_dtm(it_test, pruned_vectorizer_4_gram_400)
+dtm_test_4_gram_300 <- create_dtm(it_test, pruned_vectorizer_4_gram_300)
+dtm_test_4_gram_200 <- create_dtm(it_test, pruned_vectorizer_4_gram_200)
+dtm_test_4_gram_100 <- create_dtm(it_test, pruned_vectorizer_4_gram_100)
+dtm_test_5_gram_200 <- create_dtm(it_test, pruned_vectorizer_5_gram_200)
+dtm_test_5_gram_100 <- create_dtm(it_test, pruned_vectorizer_5_gram_100)
+#dtm_train_pruned <- create_dtm(it_train, pruned_vectorizer_1)
+#dtm_test_pruned <- create_dtm(it_test, pruned_vectorizer_1)
+#dtm_train_pruned_4 <-create_dtm(it_train, pruned_vectorizer_4) 
+#dtm_test_pruned_4 <- create_dtm(it_test, pruned_vectorizer_4)
+
+tfidf <- TfIdf$new()
+dtm_train_tfidf_2_gram_600 <- fit_transform(dtm_train_2_gram_600, tfidf)
+dtm_train_tfidf_2_gram_500 <- fit_transform(dtm_train_2_gram_500, tfidf)
+dtm_train_tfidf_2_gram_400 <- fit_transform(dtm_train_2_gram_400, tfidf)
+dtm_train_tfidf_3_gram_600 <- fit_transform(dtm_train_3_gram_600, tfidf)
+dtm_train_tfidf_3_gram_400 <- fit_transform(dtm_train_3_gram_400, tfidf)
+dtm_train_tfidf_4_gram_400 <- fit_transform(dtm_train_4_gram_400, tfidf)
+dtm_train_tfidf_4_gram_300 <- fit_transform(dtm_train_4_gram_300, tfidf)
+dtm_train_tfidf_4_gram_200 <- fit_transform(dtm_train_4_gram_200, tfidf)
+dtm_train_tfidf_4_gram_100 <- fit_transform(dtm_train_4_gram_100, tfidf)
+dtm_train_tfidf_5_gram_200 <- fit_transform(dtm_train_5_gram_200, tfidf)
+dtm_train_tfidf_5_gram_100 <- fit_transform(dtm_train_5_gram_100, tfidf)
+
+#test
+dtm_test_tfidf_2_gram_600 <- fit_transform(dtm_test_2_gram_600, tfidf)
+dtm_test_tfidf_2_gram_500 <- fit_transform(dtm_test_2_gram_500, tfidf)
+dtm_test_tfidf_2_gram_400 <- fit_transform(dtm_test_2_gram_400, tfidf)
+dtm_test_tfidf_3_gram_600 <- fit_transform(dtm_test_3_gram_600, tfidf)
+dtm_test_tfidf_3_gram_400 <- fit_transform(dtm_test_3_gram_400, tfidf)
+dtm_test_tfidf_4_gram_400 <- fit_transform(dtm_test_4_gram_400, tfidf)
+dtm_test_tfidf_4_gram_300 <- fit_transform(dtm_test_4_gram_300, tfidf)
+dtm_test_tfidf_4_gram_200 <- fit_transform(dtm_test_4_gram_200, tfidf)
+dtm_test_tfidf_4_gram_100 <- fit_transform(dtm_test_4_gram_100, tfidf)
+dtm_test_tfidf_5_gram_200 <- fit_transform(dtm_test_5_gram_200, tfidf)
+dtm_test_tfidf_5_gram_100 <- fit_transform(dtm_test_5_gram_100, tfidf)
+
+#dtm_pruned_train_tfidf <- fit_transform(dtm_train_pruned, tfidf)
+#dtm_pruned_test_tfidf <- fit_transform(dtm_test_pruned, tfidf)
+#dtm_pruned_train_tfidf_4 <- fit_transform(dtm_train_pruned_4, tfidf)
+#dtm_pruned_test_tfidf_4 <- fit_transform(dtm_test_pruned_4, tfidf)
+#############
+
+#2 gram
+t1 <- Sys.time()
+glmnet_classifier_2g_600 <- cv.glmnet(x = dtm_train_tfidf_2_gram_600,
+ y = review$stars, 
+ family = 'multinomial', 
+ # L1 penalty
+ alpha = 1,
+ # interested in the area under ROC curve
+ type.measure = "deviance",
+ # 5-fold cross-validation
+ nfolds = 5,
+ # high value is less accurate, but has faster training
+ thresh = 1e-3,
+ # again lower number of iterations for faster training
+ maxit = 1e3)
+print(difftime(Sys.time(), t1, units = 'mins'))
+
+glmnet_classifier_2g_500 <- cv.glmnet(x = dtm_train_tfidf_2_gram_500,
+ y = review$stars, 
+ family = 'multinomial', 
+ # L1 penalty
+ alpha = 1,
+ # interested in the area under ROC curve
+ type.measure = "deviance",
+ # 5-fold cross-validation
+ nfolds = 5,
+ # high value is less accurate, but has faster training
+ thresh = 1e-3,
+ # again lower number of iterations for faster training
+ maxit = 1e3)
+print(difftime(Sys.time(), t1, units = 'mins'))
+
+glmnet_classifier_2g_400 <- cv.glmnet(x = dtm_train_tfidf_2_gram_400,
+ y = review$stars, 
+ family = 'multinomial', 
+ # L1 penalty
+ alpha = 1,
+ # interested in the area under ROC curve
+ type.measure = "deviance",
+ # 5-fold cross-validation
+ nfolds = 5,
+ # high value is less accurate, but has faster training
+ thresh = 1e-3,
+ # again lower number of iterations for faster training
+ maxit = 1e3)
+
+# 3 gram
+glmnet_classifier_3g_600 <- cv.glmnet(x = dtm_train_tfidf_3_gram_600,
+ y = review$stars, 
+ family = 'multinomial', 
+ # L1 penalty
+ alpha = 1,
+ # interested in the area under ROC curve
+ type.measure = "deviance",
+ # 5-fold cross-validation
+ nfolds = 5,
+ # high value is less accurate, but has faster training
+ thresh = 1e-3,
+ # again lower number of iterations for faster training
+ maxit = 1e3) 
+
+glmnet_classifier_3g_400 <- cv.glmnet(x = dtm_train_tfidf_3_gram_400,
+ y = review$stars, 
+ family = 'multinomial', 
+ # L1 penalty
+ alpha = 1,
+ # interested in the area under ROC curve
+ type.measure = "deviance",
+ # 5-fold cross-validation
+ nfolds = 5,
+ # high value is less accurate, but has faster training
+ thresh = 1e-3,
+ # again lower number of iterations for faster training
+ maxit = 1e3) 
+
+
+# 4 gram
+glmnet_classifier_4g_400 <- cv.glmnet(x = dtm_train_tfidf_4_gram_400,
+ y = review$stars, 
+ family = 'multinomial', 
+ # L1 penalty
+ alpha = 1,
+ # interested in the area under ROC curve
+ type.measure = "deviance",
+ # 5-fold cross-validation
+ nfolds = 5,
+ # high value is less accurate, but has faster training
+ thresh = 1e-3,
+ # again lower number of iterations for faster training
+ maxit = 1e3) 
+
+glmnet_classifier_4g_300 <- cv.glmnet(x = dtm_train_tfidf_4_gram_300,
+ y = review$stars, 
+ family = 'multinomial', 
+ # L1 penalty
+ alpha = 1,
+ # interested in the area under ROC curve
+ type.measure = "deviance",
+ # 5-fold cross-validation
+ nfolds = 5,
+ # high value is less accurate, but has faster training
+ thresh = 1e-3,
+ # again lower number of iterations for faster training
+ maxit = 1e3) 
+
+
+glmnet_classifier_4g_200 <- cv.glmnet(x = dtm_train_tfidf_4_gram_200,
+ y = review$stars, 
+ family = 'multinomial', 
+ # L1 penalty
+ alpha = 1,
+ # interested in the area under ROC curve
+ type.measure = "deviance",
+ # 5-fold cross-validation
+ nfolds = 5,
+ # high value is less accurate, but has faster training
+ thresh = 1e-3,
+ # again lower number of iterations for faster training
+ maxit = 1e3) 
+
+glmnet_classifier_4g_100 <- cv.glmnet(x = dtm_train_tfidf_4_gram_100,
+ y = review$stars, 
+ family = 'multinomial', 
+ # L1 penalty
+ alpha = 1,
+ # interested in the area under ROC curve
+ type.measure = "deviance",
+ # 5-fold cross-validation
+ nfolds = 5,
+ # high value is less accurate, but has faster training
+ thresh = 1e-3,
+ # again lower number of iterations for faster training
+ maxit = 1e3) 
+
+
+
+# 5 gram
+glmnet_classifier_5g_200 <- cv.glmnet(x = dtm_train_tfidf_5_gram_200,
+ y = review$stars, 
+ family = 'multinomial', 
+ # L1 penalty
+ alpha = 1,
+ # interested in the area under ROC curve
+ type.measure = "deviance",
+ # 5-fold cross-validation
+ nfolds = 5,
+ # high value is less accurate, but has faster training
+ thresh = 1e-3,
+ # again lower number of iterations for faster training
+ maxit = 1e3) 
+
+
+glmnet_classifier_5g_100 <- cv.glmnet(x = dtm_train_tfidf_5_gram_100,
+ y = review$stars, 
+ family = 'multinomial', 
+ # L1 penalty
+ alpha = 1,
+ # interested in the area under ROC curve
+ type.measure = "deviance",
+ # 5-fold cross-validation
+ nfolds = 5,
+ # high value is less accurate, but has faster training
+ thresh = 1e-3,
+ # again lower number of iterations for faster training
+ maxit = 1e3) 
+
+saveRDS(glmnet_classifier_2g_600, 'glmnet_classifier_2g_600.RDS')
+saveRDS(glmnet_classifier_2g_500, 'glmnet_classifier_2g_500.RDS')
+saveRDS(glmnet_classifier_2g_400, 'glmnet_classifier_2g_400.RDS')
+saveRDS(glmnet_classifier_3g_600, 'glmnet_classifier_3g_600.RDS')
+saveRDS(glmnet_classifier_3g_400, 'glmnet_classifier_3g_400.RDS')
+saveRDS(glmnet_classifier_4g_300, 'glmnet_classifier_4g_300.RDS')
+saveRDS(glmnet_classifier_4g_200, 'glmnet_classifier_4g_200.RDS')
+saveRDS(glmnet_classifier_4g_100, 'glmnet_classifier_4g_100.RDS')
+saveRDS(glmnet_classifier_5g_200, 'glmnet_classifier_5g_200.RDS')
+saveRDS(glmnet_classifier_5g_100, 'glmnet_classifier_5g_100.RDS')
+
+
+#default
+set.seed("124")
+bid_samp <- sample(unique(business$business_id), size = 400)
+
+cv_id <- review$business_id %in% bid_samp
+
+## cv check
+preds_2g_600_cv <- predict(glmnet_classifier_2g_600, dtm_train_tfidf_2_gram_600[cv_id, ], type = 'class')[,1]
+preds_2g_500_cv <- predict(glmnet_classifier_2g_500, dtm_train_tfidf_2_gram_500[cv_id, ], type = 'class')[,1]
+preds_2g_400_cv <- predict(glmnet_classifier_2g_400, dtm_train_tfidf_2_gram_400[cv_id, ], type = 'class')[,1]
+preds_3g_600_cv <- predict(glmnet_classifier_3g_600, dtm_train_tfidf_3_gram_600[cv_id, ], type = 'class')[,1]
+#preds_3g_400_cv <- predict(glmnet_classifier_3g_400, dtm_train_tfidf_3_gram_400[cv_id, ], type = 'class')[,1]
+preds_4g_400_cv <- predict(glmnet_classifier_4g_400, dtm_train_tfidf_4_gram_400[cv_id, ], type = 'class')[,1]
+preds_4g_300_cv <- predict(glmnet_classifier_4g_300, dtm_train_tfidf_4_gram_300[cv_id, ], type = 'class')[,1]
+preds_4g_200_cv <- predict(glmnet_classifier_4g_200, dtm_train_tfidf_4_gram_200[cv_id, ], type = 'class')[,1]
+preds_5g_200_cv <- predict(glmnet_classifier_5g_200, dtm_train_tfidf_5_gram_200[cv_id, ], type = 'class')[,1]
+preds_5g_100_cv <- predict(glmnet_classifier_5g_100, dtm_train_tfidf_5_gram_100[cv_id, ], type = 'class')[,1]
+
+
+cv_check_2g_600 <- data_frame(business_id = review$business_id[cv_id], 
+                              "preds" = as.numeric(preds_2g_600_cv))%>% 
+      dplyr::group_by(business_id) %>%
+      dplyr::summarise(stars = mean(preds))
+cv_check_2g_500 <- data_frame(business_id = review$business_id[cv_id], 
+                              "preds" = as.numeric(preds_2g_500_cv))%>% 
+      dplyr::group_by(business_id) %>%
+      dplyr::summarise(stars = mean(preds))
+cv_check_2g_400 <- data_frame(business_id = review$business_id[cv_id], 
+                              "preds" = as.numeric(preds_2g_400_cv))%>% 
+      dplyr::group_by(business_id) %>%
+      dplyr::summarise(stars = mean(preds))
+cv_check_3g_600 <- data_frame(business_id = review$business_id[cv_id], 
+                              "preds" = as.numeric(preds_3g_600_cv))%>% 
+      dplyr::group_by(business_id) %>%
+      dplyr::summarise(stars = mean(preds))
+cv_check_4g_400 <- data_frame(business_id = review$business_id[cv_id], 
+                              "preds" = as.numeric(preds_4g_400_cv))%>% 
+      dplyr::group_by(business_id) %>%
+      dplyr::summarise(stars = mean(preds))
+cv_check_4g_300 <- data_frame(business_id = review$business_id[cv_id], 
+                              "preds" = as.numeric(preds_4g_300_cv))%>% 
+      dplyr::group_by(business_id) %>%
+      dplyr::summarise(stars = mean(preds))
+cv_check_4g_200 <- data_frame(business_id = review$business_id[cv_id], 
+                              "preds" = as.numeric(preds_4g_200_cv))%>% 
+      dplyr::group_by(business_id) %>%
+      dplyr::summarise(stars = mean(preds))
+cv_check_5g_200 <- data_frame(business_id = review$business_id[cv_id], 
+                              "preds" = as.numeric(preds_5g_200_cv))%>% 
+      dplyr::group_by(business_id) %>%
+      dplyr::summarise(stars = mean(preds))
+cv_check_5g_100 <- data_frame(business_id = review$business_id[cv_id], 
+                              "preds" = as.numeric(preds_5g_100_cv))%>% 
+      dplyr::group_by(business_id) %>%
+      dplyr::summarise(stars = mean(preds))
+
+cv_test_set_2g_600 <- business[business$business_id %in% cv_check_2g_600$business_id, ]
+cv_test_set_2g_500 <- business[business$business_id %in% cv_check_2g_500$business_id, ]
+cv_test_set_2g_400 <- business[business$business_id %in% cv_check_2g_400$business_id, ]
+cv_test_set_3g_600 <- business[business$business_id %in% cv_check_3g_600$business_id, ]
+#cv_test_set_3g_400 <- business[business$business_id %in% cv_check_3g_600$business_id, ]
+cv_test_set_4g_400 <- business[business$business_id %in% cv_check_4g_400$business_id, ]
+cv_test_set_4g_300 <- business[business$business_id %in% cv_check_4g_300$business_id, ]
+cv_test_set_4g_200 <- business[business$business_id %in% cv_check_4g_200$business_id, ]
+cv_test_set_5g_200 <- business[business$business_id %in% cv_check_5g_200$business_id, ]
+cv_test_set_5g_100 <- business[business$business_id %in% cv_check_5g_100$business_id, ]
+
+cv_test_2g_600 <- left_join(cv_test_set, cv_check_2g_600,by = c("business_id" = 'business_id'))
+
+cv_test_2g_500 <- left_join(cv_test_set, cv_check_2g_500,by = c("business_id" = 'business_id'))
+
+cv_test_2g_400 <- left_join(cv_test_set, cv_check_2g_400,by = c("business_id" = 'business_id'))
+
+cv_test_3g_600 <- left_join(cv_test_set, cv_check_3g_600,by = c("business_id" = 'business_id'))
+
+cv_test_4g_400 <- left_join(cv_test_set, cv_check_4g_400,by = c("business_id" = 'business_id'))
+
+cv_test_4g_300 <- left_join(cv_test_set, cv_check_4g_300,by = c("business_id" = 'business_id'))
+
+cv_test_4g_200 <- left_join(cv_test_set, cv_check_4g_200,by = c("business_id" = 'business_id'))
+
+cv_test_5g_200 <- left_join(cv_test_set, cv_check_5g_200,by = c("business_id" = 'business_id'))
+
+cv_test_5g_100 <- left_join(cv_test_set, cv_check_5g_100,by = c("business_id" = 'business_id'))
+
+(mean((cv_test_2g_600$stars.x - cv_test_2g_600$stars.y)^2))^.5
+(mean((cv_test_2g_500$stars.x - cv_test_2g_500$stars.y)^2))^.5
+(mean((cv_test_2g_400$stars.x - cv_test_2g_400$stars.y)^2))^.5
+(mean((cv_test_3g_600$stars.x - cv_test_3g_600$stars.y)^2))^.5
+(mean((cv_test_4g_400$stars.x - cv_test_4g_400$stars.y)^2))^.5
+(mean((cv_test_4g_300$stars.x - cv_test_4g_300$stars.y)^2))^.5
+(mean((cv_test_4g_200$stars.x - cv_test_4g_200$stars.y)^2))^.5
+(mean((cv_test_5g_200$stars.x - cv_test_5g_200$stars.y)^2))^.5
+(mean((cv_test_5g_100$stars.x - cv_test_5g_100$stars.y)^2))^.5
+
+glmnet_classifier_2g_600$cvm[glmnet_classifier_2g_600$lambda == glmnet_classifier_2g_600$lambda.min]
+glmnet_classifier_2g_500$cvm[glmnet_classifier_2g_500$lambda == glmnet_classifier_2g_500$lambda.min]
+glmnet_classifier_2g_400$cvm[glmnet_classifier_2g_400$lambda == glmnet_classifier_2g_400$lambda.min]
+glmnet_classifier_3g_600$cvm[glmnet_classifier_3g_600$lambda == glmnet_classifier_3g_600$lambda.min]
+glmnet_classifier_4g_400$cvm[glmnet_classifier_4g_400$lambda == glmnet_classifier_4g_400$lambda.min]
+glmnet_classifier_4g_300$cvm[glmnet_classifier_4g_300$lambda == glmnet_classifier_4g_300$lambda.min]
+glmnet_classifier_5g_200$cvm[glmnet_classifier_5g_200$lambda == glmnet_classifier_5g_200$lambda.min]
+
+glmnet_classifier_2g_500$nzero[glmnet_classifier_2g_500$lambda == glmnet_classifier_2g_500$lambda.min]
+glmnet_classifier_4g_400$nzero[glmnet_classifier_4g_400$lambda == glmnet_classifier_4g_400$lambda.min]
+#model
+preds_2g_600 <- predict(glmnet_classifier_2g_600, dtm_test_tfidf_2_gram_600, type = 'class')[ ,1]
+preds_2g_500 <- predict(glmnet_classifier_2g_500, dtm_test_tfidf_2_gram_500, type = 'class')[ ,1]
+preds_2g_400 <- predict(glmnet_classifier_2g_400, dtm_test_tfidf_2_gram_400, type = 'class')[ ,1]
+preds_3g_600 <- predict(glmnet_classifier_3g_600, dtm_test_tfidf_3_gram_600, type = 'class')[ ,1]
+preds_3g_400 <- predict(glmnet_classifier_3g_400, dtm_test_tfidf_3_gram_400, type = 'class')[ ,1]
+preds_4g_400 <- predict(glmnet_classifier_4g_400, dtm_test_tfidf_4_gram_400, type = 'class')[ ,1]
+preds_4g_300 <- predict(glmnet_classifier_4g_300, dtm_test_tfidf_4_gram_300, type = 'class')[ ,1]
+preds_4g_200 <- predict(glmnet_classifier_4g_200, dtm_test_tfidf_4_gram_200, type = 'class')[ ,1]
+preds_4g_100 <- predict(glmnet_classifier_4g_100, dtm_test_tfidf_4_gram_100, type = 'class')[ ,1]
+preds_5g_200 <- predict(glmnet_classifier_5g_200, dtm_test_tfidf_5_gram_200, type = 'class')[ ,1]
+preds_5g_100 <- predict(glmnet_classifier_5g_100, dtm_test_tfidf_5_gram_100, type = 'class')[ ,1]
+
+
+submission_2g_600 <- cbind(test_review, "preds" = as.numeric(preds_2g_600))%>% 
+      group_by(business_id) %>%
+      summarise(stars = mean(preds)) %>%
+  filter(business_id %in% test_business$business_id)
+
+
+submission_2g_400 <- cbind(test_review, "preds" = as.numeric(preds_2g_400))%>% 
+      group_by(business_id) %>%
+      summarise(stars = mean(preds)) %>%
+  filter(business_id %in% test_business$business_id)
+
+submission_2g_500 <- cbind(test_review, "preds" = as.numeric(preds_2g_500))%>% 
+      group_by(business_id) %>%
+      summarise(stars = mean(preds)) %>%
+  filter(business_id %in% test_business$business_id)
+
+submission_3g_600 <- cbind(test_review, "preds" = as.numeric(preds_3g_600))%>% 
+      group_by(business_id) %>%
+      summarise(stars = mean(preds)) %>%
+  filter(business_id %in% test_business$business_id)
+
+submission_4g_400 <- cbind(test_review, "preds" = as.numeric(preds_4g_400))%>% 
+      group_by(business_id) %>%
+      summarise(stars = mean(preds)) %>%
+  filter(business_id %in% test_business$business_id)
+
+submission_4g_300 <- cbind(test_review, "preds" = as.numeric(preds_4g_300))%>% 
+      group_by(business_id) %>%
+      summarise(stars = mean(preds)) %>%
+  filter(business_id %in% test_business$business_id)
+
+
+submission_4g_200 <- cbind(test_review, "preds" = as.numeric(preds_4g_200))%>% 
+      group_by(business_id) %>%
+      summarise(stars = mean(preds)) %>%
+  filter(business_id %in% test_business$business_id)
+
+submission_4g_100 <- cbind(test_review, "preds" = as.numeric(preds_4g_100))%>% 
+      group_by(business_id) %>%
+      summarise(stars = mean(preds)) %>%
+  filter(business_id %in% test_business$business_id)
+
+submission_5g_200 <- cbind(test_review, "preds" = as.numeric(preds_5g_200))%>% 
+      group_by(business_id) %>%
+      summarise(stars = mean(preds)) %>%
+  filter(business_id %in% test_business$business_id)
+
+submission_5g_100 <- cbind(test_review, "preds" = as.numeric(preds_5g_100))%>% 
+      group_by(business_id) %>%
+      summarise(stars = mean(preds)) %>%
+  filter(business_id %in% test_business$business_id)
+
+write.csv(submission_4g_400, "submission_5g_200.csv", row.names = FALSE)
+write.csv(submission_4g_400, "submission_5g_100.csv", row.names = FALSE)
+write.csv(submission_4g_400, "submission_4g_400.csv", row.names = FALSE)
+write.csv(submission_4g_400, "submission_4g_300.csv", row.names = FALSE)
+write.csv(submission_4g_400, "submission_4g_200.csv", row.names = FALSE)
+write.csv(submission_4g_400, "submission_4g_100.csv", row.names = FALSE)
+write.csv(submission_4g_300, "submission_3g_600.csv", row.names = FALSE)
+write.csv(submission_2g_600, "submission_3g_400.csv", row.names = FALSE)
+write.csv(submission_2g_600, "submission_2g_600.csv", row.names = FALSE)
+write.csv(submission_2g_600, "submission_2g_500.csv", row.names = FALSE)
+write.csv(submission_2g_600, "submission_2g_400.csv", row.names = FALSE)
+# train the model (l1 penalty, lasso)
+t1 <- Sys.time()
+glmnet_classifier <- cv.glmnet(x = dtm_train_tfidf,
+ y = review$stars, 
+ family = 'multinomial', 
+ # L1 penalty
+ alpha = 1,
+ # interested in the area under ROC curve
+ type.measure = "deviance",
+ # 5-fold cross-validation
+ nfolds = 5,
+ # high value is less accurate, but has faster training
+ thresh = 1e-3,
+ # again lower number of iterations for faster training
+ maxit = 1e3)
+print(difftime(Sys.time(), t1, units = 'mins'))
+
+t1 <- Sys.time()
+glmnet_classifier2 <- cv.glmnet(x = dtm_pruned_train_tfidf,
+ y = review$stars, 
+ family = 'multinomial', 
+ # L1 penalty
+ alpha = 1,
+ # interested in the area under ROC curve
+ type.measure = "deviance",
+ # 5-fold cross-validation
+ nfolds = 5,
+ # high value is less accurate, but has faster training
+ thresh = 1e-3,
+ # again lower number of iterations for faster training
+ maxit = 1e3)
+
+glmnet_classifier_test <- cv.glmnet(x = dtm_pruned_train_tfidf,
+ y = review$stars, 
+ family = 'multinomial', 
+ # L1 penalty
+ alpha = 1,
+ # interested in the area under ROC curve
+ type.measure = "mse",
+ # 5-fold cross-validation
+ nfolds = 5,
+ # high value is less accurate, but has faster training
+ thresh = 1e-3,
+ # again lower number of iterations for faster training
+ maxit = 1e3)
+
+glmnet_classifier_4gram_stopwords <- cv.glmnet(x = dtm_pruned_train_tfidf_4,
+ y = review$stars, 
+ family = 'multinomial', 
+ # L1 penalty
+ alpha = 1,
+ # interested in the area under ROC curve
+ type.measure = "deviance",
+ # 5-fold cross-validation
+ nfolds = 5,
+ # high value is less accurate, but has faster training
+ thresh = 1e-3,
+ # again lower number of iterations for faster training
+ maxit = 1e3)
+
+
+
+print(difftime(Sys.time(), t1, units = 'mins'))
+
+ 
+plot(glmnet_classifier)
+print(paste("max AUC =", round(max(glmnet_classifier$cvm), 4)))
+preds <- predict(glmnet_classifier, dtm_test_tfidf, type = 'class')[ ,1]
+
+plot(glmnet_classifier2)
+print(paste("max AUC =", round(max(glmnet_classifier2$cvm), 4)))
+glmnet_preds_2 <- predict(glmnet_classifier2, dtm_pruned_test_tfidf, type = 'class')[ ,1]
+glmnet_preds_test <- predict(glmnet_classifier_test, dtm_pruned_test_tfidf, type = 'class')[,1]
+glmnet_preds_4gram <- predict(glmnet_classifier_4gram_stopwords, dtm_pruned_test_tfidf_4, type = 'class')[,1]
+# save the model for future using
+saveRDS(glmnet_classifier, 'glmnet_classifier.RDS')
+glmnet_classifier<- readRDS('glmnet_classifier.RDS')
+
+saveRDS(glmnet_classifier2, 'glmnet_classifier2.RDS')
+glmnet_classifier2<- readRDS('glmnet_classifier2.RDS')
+
+# Creating the first submission based on the l1 penalty lasso model
+
+submission <- data.frame(preds)
+write.csv(submission1.csv, header =F)
+
+test_review_with_preds <- cbind(test_review, "preds" = as.numeric(preds))
+test_review_with_preds2 <- cbind(test_review, "preds" = as.numeric(glmnet_preds_2))
+test_review_with_preds3 <- cbind(test_review, "preds" = as.numeric(glmnet_preds_test))
+test_review_with_preds_4gram <- cbind(test_review, "preds" = as.numeric(glmnet_preds_4gram))
+submission_1<- test_review_with_preds %>% 
+      group_by(business_id) %>%
+      summarise(stars = mean(preds))
+submission_2<- test_review_with_preds2 %>% 
+      group_by(business_id) %>%
+      summarise(stars = mean(preds))
+submission_3<- test_review_with_preds2 %>% 
+      group_by(business_id) %>%
+      summarise(stars = mean(preds))
+test_hyung <- data.frame(business_id = test_review$business_id, stars = (test_grade), stringsAsFactors = F)
+submission_4<- test_review_with_preds3 %>% 
+      group_by(business_id) %>%
+      summarise(stars = mean(preds))
+submission_4gram <- test_review_with_preds_4gram%>% 
+      group_by(business_id) %>%
+      summarise(stars = mean(preds))
+
+
+
+hyungsub_1 <- test_hyung %>%
+      group_by(business_id) %>%
+      summarise(meanstars = mean(stars))
+submission_1$stars<- round(submission_1$stars/0.5)*0.5
+submission_2$stars <- round(submission_2$stars/0.5)*0.5
+
+submission_1 <- submission_1[submission_1$business_id %in% test_business$business_id,]
+submission_2 <- submission_2[submission_2$business_id %in% test_business$business_id,]
+submission_3 <- submission_3[submission_2$business_id %in% test_business$business_id,]
+submission_4 <- submission_4[submission_4$business_id %in% test_business$business_id,]
+submission_4gram <- submission_4gram[submission_4gram$business_id %in% test_business$business_id,]
+hyungsub_1 <- hyungsub_1[hyungsub_1$business_id %in% test_business$business_id,]
+# Writing CSV file
+write.csv(x = submission_1,file = "submission_1.csv", row.names = FALSE)
+write.csv(x = submission_2,file = "submission_2.csv", row.names = FALSE)
+write.csv(x = submission_3,file = "submission_3.csv", row.names = FALSE)
+write.csv(x = submission_4,file = "submission_4.csv", row.names = FALSE)
+sub1 <- read.csv("submission_1.csv", header = T, stringsAsFactors = F)
+sub2 <- read.csv("submission_2.csv", header = T, stringsAsFactors = F)
+sub3 <- read.csv("submission_3.csv", header = T, stringsAsFactors = F)
+sub4 <- read.csv("submission_4.csv", header = T, stringsAsFactors = F)
+sub3$stars <- round(sub3$stars/0.5)*0.5
+
+```
+
+
+
+
+# Using random forest on Text2Vec files
+
+```{r}
+RTextTools::
+# Doesn't work for multi-class
+container <- RTextTools::create_container(dtm_train_pruned, review$stars, trainSize = 1:1000, virgin = F)
+svm_model <- train_model(container, "SVM", kernel = 'linear', cost = 1)
+
+
+# Needed pruning
+pruned_vocab_1000 = prune_vocabulary(vocab, term_count_min = 1000,
+                                doc_proportion_max = 0.5, doc_proportion_min = 0.001)
+pruned_vectorizer_1000 <- vocab_vectorizer(pruned_vocab_1000)
+
+dtm_train_pruned_2 <- create_dtm(it_train, pruned_vectorizer_1000)
+dtm_test_pruned_2 <- create_dtm(it_test, pruned_vectorizer_1000)
+
+
+ctrl.svm.1 <- trainControl(method="repeatedcv",
+                           number=1,
+                           repeats=1,
+                           summaryFunction = multiClassSummary,
+                           verboseIter = TRUE)
+t1 <- Sys.time()
+dtm_svm_test <- create_matrix(review$text[1:1000])
+print(difftime(Sys.time(), t1, units = 'mins'))
+svm_classifier <- train(x = as.matrix(dtm_train_pruned[1:100,]), y= as.factor(review$stars[1:100]), 
+                   method="svmLinear3",  
+                   metric="Accuracy", 
+                   trControl = ctrl.svm.1, 
+                   scale = FALSE, verbose = TRUE)
+print(difftime(Sys.time(), t1, units = 'mins'))
+svm_preds <- classify_model(container, svm_classifier)
+
+```
+
+ensemble with Tae's result
+
+```{r}
+tae_result <- read.csv("tae_result.csv",header = T, stringsAsFactors = F)
+colnames(tae_result)
+a <- left_join(tae_result, submission_3)
+```
+Writing the report
+
+
+```{r}
+xtable(data.frame("star5" = c("best", "food", "good", "great", "love"),
+           "star3" = c("food","get","good","great","like" ),
+           "star1" = c("back", "never", "get", "food", "good")))
+xtable(head(dplyr::arrange(vocab_1gram$vocab, desc(terms_counts)),n=10))
+xtable(head(dplyr::arrange(vocab$vocab, desc(terms_counts)), n = 10))
+
+
+```
+
+
+
+
+
+
+
+
+## HJ: creating dictionary
+
+```{R}
+review <- review_train #your review_trian data
+get_tdm <- function(review) {
+  library(dplyr)
+  library(tm)
+	star_5_reviews <-
+  		review %>% filter(review$stars == 5)
+	star_4_reviews <-
+  		review %>% filter(review$stars == 4)
+	star_3_reviews <-
+  		review %>% filter(review$stars == 3)
+	star_2_reviews <-
+  		review %>% filter(review$stars == 2)
+	star_1_reviews <-
+		review %>% filter(review$stars == 1)
+	star_5_corp <- tm::Corpus(VectorSource(star_5_reviews$text))
+	star_4_corp <- tm::Corpus(VectorSource(star_4_reviews$text))
+	star_3_corp <- tm::Corpus(VectorSource(star_3_reviews$text))
+	star_2_corp <- tm::Corpus(VectorSource(star_2_reviews$text))
+	star_1_corp <- tm::Corpus(VectorSource(star_1_reviews$text))
+	star_5_corp <- tm_map(star_5_corp, removeWords , stopwords("english")) 
+	star_4_corp <- tm_map(star_4_corp, removeWords , stopwords("english")) 
+	star_3_corp <- tm_map(star_3_corp, removeWords , stopwords("english")) 
+	star_2_corp <- tm_map(star_2_corp, removeWords , stopwords("english")) 
+	star_1_corp <- tm_map(star_1_corp, removeWords , stopwords("english"))
+	#tdm
+	star_5_tdm <- tm::TermDocumentMatrix(star_5_corp)
+	star_4_tdm <- tm::TermDocumentMatrix(star_4_corp)
+	star_3_tdm <- tm::TermDocumentMatrix(star_3_corp)
+	star_2_tdm <- tm::TermDocumentMatrix(star_2_corp)
+	star_1_tdm <- tm::TermDocumentMatrix(star_1_corp)
+  # sparse = 0.999, only terms occurring in 0.1% of the documents were retained.
+  #	nrow(review_train) == 116474; 116474 * 0.001 = 116.474; terms occuring more than 116 documents are retained
+star_1_tdm<-	removeSparseTerms(star_1_tdm, 0.999) 
+star_2_tdm<-	removeSparseTerms(star_2_tdm, 0.999)
+star_3_tdm<-	removeSparseTerms(star_3_tdm, 0.999)
+star_4_tdm<-	removeSparseTerms(star_4_tdm, 0.999)
+star_5_tdm<-	removeSparseTerms(star_5_tdm, 0.999)
+	gimme_dic <- function (tdm, df, score) {
+  		gimme_wordlist <- function(tdm) {
+    	tdm <- rowSums(as.matrix(tdm))
+    	tdm <- tdm[order(tdm, decreasing = T)]
+      	return(tdm)
+  		}
+  			df<-data.frame()
+  		gimme_freq <- function(tdm, df, score) {
+    	df <- as.data.frame(tdm)
+    	df$word <- unlist(attributes(tdm))
+    	df$score <- score
+    	colnames(df)[1] <- 'count'
+      	return(df)
+    	}
+  	return(gimme_freq(gimme_wordlist(tdm), df, score))
+	}
+	star_1_dic<-gimme_dic(star_1_tdm, df, 1)
+	star_2_dic<-gimme_dic(star_2_tdm, df, 2)
+	star_3_dic<-gimme_dic(star_3_tdm, df, 3)
+	star_4_dic<-gimme_dic(star_4_tdm, df, 4)
+	star_5_dic<-gimme_dic(star_5_tdm, df, 5)
+  star_dic <- rbind(star_1_dic, star_2_dic, star_3_dic, star_4_dic, star_5_dic)
+	star_dic$weight <- star_dic$count * star_dic$score
+dic<-star_dic %>%
+  dplyr::select(word, count, score, weight) %>%
+  dplyr::group_by(word) %>%
+  dplyr::summarise(mean = sum(weight) / sum(count),
+            count = sum(count)) %>%
+  dplyr::arrange(desc(count)) %>%
+  dplyr::filter(count > max(count)*0.001) 
+  #max(count) * 0.001 = 113.007; words appreared more than 113 times
+  #61464 words --> max(count) * 0.001 --> 4009
+return(dic)
+}
+word_dic <- get_tdm(review)
+lets_grade <- function(review_data) {
+	star_corp <- Corpus(VectorSource(review_data$text))
+	star_corp <- tm_map(star_corp, removeWords , stopwords("english"))
+	star_dtm <- tm::DocumentTermMatrix(star_corp)
+	star_dtm <-  as.data.frame((as.matrix(star_dtm)))
+	score_wgt<- apply(star_dtm, 1, sum)
+ 		change_colname<-function(data) {for(i in 1:ncol(data)) {
+  			if (colnames(data)[i] %in% word_dic$word) {
+  				colnames(data)[i]<-word_dic$mean[word_dic$word==colnames(data)[i]]
+  				}
+  			else  colnames(data)[i]<-0
+  			}
+  			return(data)
+  		}
+  	star_dtm <- change_colname(star_dtm)
+  		for (i in 1:ncol(star_dtm)) {
+  		star_dtm[i] <- as.numeric(colnames(star_dtm)[i])*star_dtm[i] 	
+		}
+	star_dtm$score <- apply(star_dtm, 1, sum)
+  		for (i in 1:nrow(star_dtm)) {
+  		star_dtm$score[i] <- star_dtm$score[i]/score_wgt[i]
+  		}
+	return(star_dtm$score)
+}
+#0755 ~
+ptme <- proc.time()
+test_grade <- lets_grade(test_review)
+proc.time() - ptme
+```
