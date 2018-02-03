@@ -7,5 +7,6 @@ In this project, our team explored a dataset containing information about busine
 
 ### File Descriptions
 
-154_Final_Report.pdf :
+•	154_Final_Report.pdf :
+
 This paper summarizes the background, problem, methodology and results of analysis on predicting business stars. In order to make full use of sta- tistical models and machine learning techniques, we utilized the Yelp data basis. The procuess of our analysis was based in exploratory data analy- sis, feature engineering, and statistical modeling.
